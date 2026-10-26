@@ -1,0 +1,24 @@
+# Private working records and runtime state
+ledger.md
+.fleet-watch-state.json
+*.log
+*.tmp
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+.happy/
+.aws/
+.claude/
+.codex/
+.agents/
+deploy/*.env
+deploy/*.service
+
+node_modules/
+.DS_Store

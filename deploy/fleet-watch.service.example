@@ -1,0 +1,14 @@
+[Unit]
+Description=Fleet mention notifications and bot briefings
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/fleet-watch/fleet-watch.env
+# Replace both paths with your local absolute paths; systemd does not load shell profiles.
+ExecStart=/absolute/path/to/node /absolute/path/to/fleet-watch/fleet-watch.mjs
+WorkingDirectory=%h
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
