@@ -39,19 +39,15 @@ for (const file of [join(HAPPY_AGENT_DIR, 'package.json'), HAPPY_AGENT_BIN, BOT_
 const require = createRequire(join(HAPPY_AGENT_DIR, 'package.json'));
 const { io } = require('socket.io-client');
 const nacl = require('tweetnacl');
-const axios = require('axios');
+const axios = require('axios').create({ timeout: config.httpTimeoutMs });
 if (config.check) {
   console.log('Configuration, briefing file and runtime dependencies OK (credentials and network not checked).');
   process.exit(0);
 }
 
-const MAX_SEGMENT = 8000;              // longer segments are truncated in the notification (full text: history)
-const RATE_WINDOW_MS = 5 * 60_000;     // per-pair limit: at most RATE_MAX mentions per window
-const RATE_MAX = 10;
-const IDLE_FLUSH_MS = 30_000;          // open turn + not thinking + no messages this long = ended (see below)
-const REPLAY_MARGIN = 300;             // seq this far below the session's max seen = re-delivered old message
-const OFFLINE_AFTER_MS = 2 * 60_000;   // no heartbeat for this long = offline (heartbeats arrive every ~2 s)
-const IDLE_WAIT_MS = 30 * 60_000;      // max wait for a busy target before sending anyway
+const { maxSegment: MAX_SEGMENT, rateWindowMs: RATE_WINDOW_MS, rateMax: RATE_MAX,
+  idleFlushMs: IDLE_FLUSH_MS, replayMargin: REPLAY_MARGIN,
+  offlineAfterMs: OFFLINE_AFTER_MS, idleWaitMs: IDLE_WAIT_MS } = config;
 
 const log = (...a) => console.error(new Date().toISOString(), ...a);
 // Never print raw error objects: axios errors carry request headers, including the bearer token.
@@ -134,10 +130,10 @@ const creds = readCredentials();
 const slug = (t) => (t ?? '').trim().toLowerCase().replace(/\s+/g, '-');
 const sessions = new Map(); // id -> { enc, title, archived, active, thinking, lastSeen, aliases:Set, turns:Map, seen:Set }
 
-// The Commander is found the same way as bots: by its live title ("commander"), not by a fixed ID, so a
+// The Commander is found the same way as bots: by its configured live title (default "commander"), not by a fixed ID, so a
 // resume that changes the Happy session ID still works. If several match, the single online one wins.
 const COMMANDER = 'commander'; // outbox key; resolved to a session at send time
-const isCommander = (id) => { const s = sessions.get(id); return !!s && !s.archived && slug(s.title) === COMMANDER; };
+const isCommander = (id) => { const s = sessions.get(id); return !!s && !s.archived && slug(s.title) === config.commanderTitle; };
 function commanderId() {
   const all = [...sessions.keys()].filter(isCommander);
   const live = all.filter((id) => sessions.get(id).active);
@@ -189,7 +185,7 @@ function refreshSessions() {
       const resp = await axios.get(`${serverUrl}/v1/sessions`, { headers: { Authorization: `Bearer ${creds.token}` } });
       for (const raw of resp.data.sessions) upsertSession(raw);
     } catch (e) { log('session refresh failed:', errMsg(e)); }
-    finally { setTimeout(() => { refreshing = null; }, 5000); } // at most one refresh per 5 s
+    finally { setTimeout(() => { refreshing = null; }, config.refreshCooldownMs); } // throttle session refreshes
   })();
   return refreshing;
 }
@@ -209,7 +205,7 @@ async function fetchMessages(id) {
 }
 const markSeen = (id, mid) => {
   const s = sessions.get(id);
-  s.seen.add(mid); state.seen[id] = [...s.seen].slice(-2000); saveState();
+  s.seen.add(mid); state.seen[id] = [...s.seen].slice(-config.seenLimit); saveState();
 };
 const initializing = new Map(); // id -> promise (connect and enrollment can race)
 function initSeen(id) {
@@ -222,7 +218,7 @@ async function doInitSeen(id) {
     const s = sessions.get(id);
     for (const m of msgs) s.seen.add(m.id);
     state.maxSeq[id] = Math.max(state.maxSeq[id] ?? 0, ...msgs.map((m) => m.seq));
-    state.seen[id] = [...s.seen].slice(-2000); saveState();
+    state.seen[id] = [...s.seen].slice(-config.seenLimit); saveState();
     log(`#${handleOf(id)}: initialized with ${msgs.length} existing messages`);
   } catch (e) { log(`#${handleOf(id)}: init failed: ${errMsg(e)}`); }
 }
@@ -366,19 +362,19 @@ async function drain(key) {
     const { text, onSent } = q[0];
     const to = key === COMMANDER ? commanderId() : key;
     const label = key === COMMANDER ? 'commander' : `#${handleOf(to)}`;
-    if (!to && !STDOUT_MODE) { log('no single session titled "commander"; retry in 30s'); await sleep(30_000); continue; }
+    if (!to && !STDOUT_MODE) { log(`no single session titled "${config.commanderTitle}"; retry in ${config.retryMs}ms`); await sleep(config.retryMs); continue; }
     if (!STDOUT_MODE) {
       // Do not interrupt: wait until the heartbeat says the target is not thinking (local state, no server polling),
       // then `happy-agent wait` for any pending permission prompt.
       const t0 = Date.now();
       while (sessions.get(to)?.thinking && Date.now() - t0 < IDLE_WAIT_MS) await sleep(1000);
-      await run(['wait', to, '--timeout', '1800']);
+      await run(['wait', to, '--timeout', String(config.cliWaitTimeoutS)]);
     }
     const body = typeof text === 'function' ? text() : text;
     if (STDOUT_MODE) { console.log(`[to ${label}] ` + body.replace(/\n/g, ' ⏎ ').slice(0, 400)); q.shift(); onSent?.(); continue; }
     const r = await run(['send', to, body]);
     if (r.ok) { q.shift(); onSent?.(); log(`sent to ${label}`); }
-    else { log(`send to ${label} failed, retry in 30s:`, r.out.slice(0, 200)); await sleep(30_000); }
+    else { log(`send to ${label} failed, retry in ${config.retryMs}ms:`, r.out.slice(0, 200)); await sleep(config.retryMs); }
   }
 }
 
@@ -387,7 +383,7 @@ async function drain(key) {
 const socket = io(serverUrl, {
   auth: { token: creds.token, clientType: 'user-scoped' },
   path: '/v1/updates',
-  reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000,
+  reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: config.reconnectDelayMs, reconnectionDelayMax: config.reconnectDelayMaxMs,
   transports: ['websocket'],
 });
 socket.on('connect', async () => {
@@ -434,7 +430,7 @@ setInterval(() => {
     const s = sessions.get(id);
     if (s.active && Date.now() - s.lastSeen > OFFLINE_AFTER_MS) { s.active = false; log(`#${handleOf(id)}: offline (no heartbeat)`); }
   }
-}, 30_000);
+}, config.offlineCheckMs);
 
 // Codex turns it continues on its own can end with neither turn-end nor ready. Treat a turn as ended once the
 // bot is not thinking and has sent nothing (no tool calls, no service events, no subagent output) for IDLE_FLUSH_MS.
@@ -445,7 +441,7 @@ setInterval(() => {
     if (!s.turns.size || s.thinking || Date.now() - (s.lastMsgAt ?? 0) < IDLE_FLUSH_MS) continue;
     for (const turn of [...s.turns.keys()]) { log(`#${handleOf(id)}: turn ${turn} idle with no end event; flushing`); onTurnEnd(id, turn, 'idle'); }
   }
-}, 5_000);
+}, config.idleCheckMs);
 
 // Re-brief everyone when bot.md changes.
 loadBotMd();
@@ -459,7 +455,7 @@ fsWatch(dirname(BOT_MD), (_, f) => {
     if (botMdVersion === before) return;
     log(`bot.md changed (${before} -> ${botMdVersion}); re-briefing online bots`);
     for (const id of bots()) maybeBrief(id);
-  }, 2000);
+  }, config.briefDebounceMs);
 });
 
 // Startup log: the 'connect' handler enrolls and catches up.
@@ -468,4 +464,4 @@ const all = bots();
 const count = {};
 for (const id of all) for (const h of sessions.get(id).aliases) count[h] = (count[h] ?? 0) + 1;
 for (const [h, n] of Object.entries(count)) if (n > 1) log(`warning: #${h} is shared by ${n} bots; mentions go to the one online, or are ambiguous if not exactly one is`);
-log(`server ${serverUrl}; bot.md ${botMdVersion}${NO_BRIEF ? ' (briefings on hold)' : ''}; bots: ${all.map((id) => `#${handleOf(id)}${online(id) ? '' : '(offline)'}`).join(', ') || '(none yet: no session title contains "bot")'}; notify ${STDOUT_MODE ? 'stdout' : 'commander ' + (commanderId() ?? '(none found: title a session "commander")')}`);
+log(`server ${serverUrl}; bot.md ${botMdVersion}${NO_BRIEF ? ' (briefings on hold)' : ''}; bots: ${all.map((id) => `#${handleOf(id)}${online(id) ? '' : '(offline)'}`).join(', ') || '(none yet: no session title contains "bot")'}; notify ${STDOUT_MODE ? 'stdout' : 'commander ' + (commanderId() ?? `(none found: title a session "${config.commanderTitle}")`)}`);

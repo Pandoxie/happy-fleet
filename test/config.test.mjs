@@ -36,3 +36,24 @@ test('env file loads from another cwd; exported environment takes priority', () 
   assert.equal(c.serverUrl, 'https://export.example');
   assert.equal(c.botMd, join(ROOT, 'rules.md'));
 });
+test('runtime tuning handles units, zero exceptions and normalized Commander title', () => {
+  const c = readConfig({ ...base, FLEET_COMMANDER_TITLE: ' Fleet Leader ',
+    FLEET_RATE_MAX: '25', FLEET_RATE_WINDOW_MS: '60000', FLEET_CLI_WAIT_TIMEOUT_S: '45',
+    FLEET_HTTP_TIMEOUT_MS: '15000', FLEET_REPLAY_MARGIN: '0', FLEET_NO_BRIEF: '0' });
+  assert.equal(c.commanderTitle, 'fleet-leader');
+  assert.equal(c.rateMax, 25);
+  assert.equal(c.rateWindowMs, 60000);
+  assert.equal(c.cliWaitTimeoutS, 45);
+  assert.equal(c.httpTimeoutMs, 15000);
+  assert.equal(c.replayMargin, 0);
+  assert.equal(c.noBrief, false);
+  assert.equal(readConfig(base).httpTimeoutMs, 0);
+});
+test('bad timer and limit values fail before runtime; reconnect bounds are consistent', () => {
+  for (const value of ['-1', '0', '0.5', 'NaN', 'Infinity', '2147483648', '1e3']) {
+    assert.throws(() => readConfig({ ...base, FLEET_RETRY_MS: value }), /FLEET_RETRY_MS/);
+  }
+  assert.throws(() => readConfig({ ...base, FLEET_RATE_MAX: '0' }), /FLEET_RATE_MAX/);
+  assert.throws(() => readConfig({ ...base, FLEET_COMMANDER_TITLE: ' ' }), /FLEET_COMMANDER_TITLE/);
+  assert.throws(() => readConfig({ ...base, FLEET_RECONNECT_DELAY_MS: '6000' }), /FLEET_RECONNECT_DELAY_MAX_MS/);
+});

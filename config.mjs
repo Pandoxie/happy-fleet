@@ -37,8 +37,42 @@ export function readConfig(env = process.env, args = []) {
     if (value === 'true' || value === '1') return true;
     throw new Error(`${name} must be true, false, 1 or 0`);
   };
+  const integer = (name, fallback, min = 1) => {
+    const raw = env[name]?.trim();
+    if (!raw) return fallback;
+    const value = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < min || value > 2147483647) {
+      throw new Error(`${name} must be an integer from ${min} to 2147483647`);
+    }
+    return value;
+  };
+  const commanderTitle = (env.FLEET_COMMANDER_TITLE ?? 'commander').trim().toLowerCase().replace(/\s+/g, '-');
+  if (!commanderTitle) throw new Error('FLEET_COMMANDER_TITLE must not be blank');
+  const tuning = {
+    maxSegment: integer('FLEET_MAX_SEGMENT', 8000, 1),
+    rateMax: integer('FLEET_RATE_MAX', 10, 1),
+    rateWindowMs: integer('FLEET_RATE_WINDOW_MS', 300000, 1),
+    idleFlushMs: integer('FLEET_IDLE_FLUSH_MS', 30000, 1),
+    replayMargin: integer('FLEET_REPLAY_MARGIN', 300, 0),
+    seenLimit: integer('FLEET_SEEN_LIMIT', 2000, 1),
+    offlineAfterMs: integer('FLEET_OFFLINE_AFTER_MS', 120000, 1),
+    idleWaitMs: integer('FLEET_IDLE_WAIT_MS', 1800000, 1),
+    cliWaitTimeoutS: integer('FLEET_CLI_WAIT_TIMEOUT_S', 1800, 1),
+    retryMs: integer('FLEET_RETRY_MS', 30000, 1),
+    refreshCooldownMs: integer('FLEET_REFRESH_COOLDOWN_MS', 5000, 1),
+    reconnectDelayMs: integer('FLEET_RECONNECT_DELAY_MS', 1000, 1),
+    reconnectDelayMaxMs: integer('FLEET_RECONNECT_DELAY_MAX_MS', 5000, 1),
+    offlineCheckMs: integer('FLEET_OFFLINE_CHECK_MS', 30000, 1),
+    idleCheckMs: integer('FLEET_IDLE_CHECK_MS', 5000, 1),
+    briefDebounceMs: integer('FLEET_BRIEF_DEBOUNCE_MS', 2000, 1),
+    httpTimeoutMs: integer('FLEET_HTTP_TIMEOUT_MS', 0, 0),
+  };
+  if (tuning.reconnectDelayMaxMs < tuning.reconnectDelayMs) {
+    throw new Error('FLEET_RECONNECT_DELAY_MAX_MS must be >= FLEET_RECONNECT_DELAY_MS');
+  }
   const agentDir = localPath(env.HAPPY_AGENT_DIR || 'vendor/happy-agent');
   return {
+    ...tuning, commanderTitle,
     serverUrl: server.replace(/\/+$/, ''), agentDir,
     agentBin: localPath(env.HAPPY_AGENT_BIN || join(agentDir, 'bin/happy-agent.mjs')),
     happyHome: localPath(env.HAPPY_HOME_DIR || '~/.happy'),
