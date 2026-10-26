@@ -58,7 +58,7 @@ To each bot:
 
 | Path | What |
 | --- | --- |
-| `fleet-watch.mjs` | The service: single file, no dependencies of its own. It loads `socket.io-client`, `tweetnacl` and `axios` from the installed `happy-agent` package. |
+| `fleet-watch.mjs` | The service, configured by `config.mjs`. It loads `socket.io-client`, `tweetnacl` and `axios` from the bundled (or configured) `happy-agent` package. |
 | `bot.md` | The rules sent to every bot. Editing it re-briefs all online bots, unless briefings are held. |
 | `.fleet-watch-state.json` | `seen` message IDs, title `aliases`, and the `briefed` version per bot. |
 | `~/.config/systemd/user/fleet-watch.service` | The systemd user unit. |
@@ -67,10 +67,9 @@ To each bot:
 
 See [README.md](README.md) for required environment variables and the example user service.
 The service reads credentials from `~/.happy/agent.key` (or `HAPPY_HOME_DIR`).
-`HAPPY_SERVER_URL` and `HAPPY_AGENT_DIR` are required; no server or installation path is built in.
+`HAPPY_SERVER_URL` is required. `.env` loads automatically; `HAPPY_AGENT_DIR` defaults to the bundled `vendor/happy-agent`. Run `node scripts/setup.mjs` first. See README for all environment variables and their CLI overrides.
 Errors are logged as a status and message rather than raw request objects.
-To hold briefings, add `--no-brief` to your local unit's `ExecStart`, reload and restart it.
-Remove that flag to resume briefings.
+To hold briefings, set `FLEET_NO_BRIEF=true` in `.env` and restart the service. Set it to `false` and restart to resume.
 
 ## Operations
 
@@ -79,7 +78,7 @@ systemctl --user status fleet-watch
 journalctl --user -u fleet-watch -f     # startup line lists bots; logs enroll/online/offline/title changes
 systemctl --user restart fleet-watch    # after editing the script (bot.md reloads by itself)
 # test without sending anything (separate state file; --bot-title overrides the enrollment regex):
-node fleet-watch.mjs --stdout --no-brief --state /tmp/test.json --bot-title '\bbot\b'
+node fleet-watch.mjs --stdout --no-brief --state .fleet-watch-preview.json --bot-title '\bbot\b'
 ```
 
 ## Limits and known risks

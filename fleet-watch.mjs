@@ -23,42 +23,28 @@
 
 import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, watch as fsWatch } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, watch as fsWatch } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
+import { loadEnvironment, readConfig, cliEnvironment } from './config.mjs';
 import { createHash, createDecipheriv, createHmac } from 'node:crypto';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-// Validate configuration before loading dependencies, reading credentials or connecting.
-const serverSetting = process.env.HAPPY_SERVER_URL?.trim();
-if (!serverSetting) throw new Error('HAPPY_SERVER_URL is required');
-let endpoint;
-try { endpoint = new URL(serverSetting); }
-catch { throw new Error('HAPPY_SERVER_URL must be a valid HTTP(S) URL'); }
-if (!['https:', 'http:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
-  throw new Error('HAPPY_SERVER_URL must be an HTTP(S) URL without credentials, query or fragment');
+loadEnvironment();
+const config = readConfig(process.env, process.argv.slice(2));
+const { serverUrl, agentDir: HAPPY_AGENT_DIR, agentBin: HAPPY_AGENT_BIN,
+  happyHome, botMd: BOT_MD, stateFile: STATE_FILE, botTitle: BOT_TITLE,
+  only: ONLY, stdout: STDOUT_MODE, noBrief: NO_BRIEF } = config;
+for (const file of [join(HAPPY_AGENT_DIR, 'package.json'), HAPPY_AGENT_BIN, BOT_MD]) {
+  if (!existsSync(file)) throw new Error(`Missing required file: ${file}; run node scripts/setup.mjs or check your configuration`);
 }
-const serverUrl = serverSetting.replace(/\/+$/, '');
-const HAPPY_AGENT_DIR = process.env.HAPPY_AGENT_DIR;
-if (!HAPPY_AGENT_DIR || !HAPPY_AGENT_DIR.startsWith('/')) {
-  throw new Error('HAPPY_AGENT_DIR must be the absolute path to the installed happy-agent package');
-}
-const HAPPY_AGENT_BIN = process.env.HAPPY_AGENT_BIN ?? join(HAPPY_AGENT_DIR, 'bin/happy-agent.mjs');
 const require = createRequire(join(HAPPY_AGENT_DIR, 'package.json'));
 const { io } = require('socket.io-client');
 const nacl = require('tweetnacl');
 const axios = require('axios');
+if (config.check) {
+  console.log('Configuration, briefing file and runtime dependencies OK (credentials and network not checked).');
+  process.exit(0);
+}
 
-const args = process.argv.slice(2);
-const flag = (n) => args.includes(n);
-const opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
-const STDOUT_MODE = flag('--stdout');
-const NO_BRIEF = flag('--no-brief');   // hold briefings (e.g. while bots are being renamed)
-const ONLY = opt('--only')?.split(',');
-const BOT_MD = opt('--bot-md') ?? join(HERE, 'bot.md');
-const STATE_FILE = opt('--state') ?? join(HERE, '.fleet-watch-state.json');
-const BOT_TITLE = opt('--bot-title') ? new RegExp(opt('--bot-title'), 'i') : /\bbot\b/i; // enrollment: title contains the word "bot"
 const MAX_SEGMENT = 8000;              // longer segments are truncated in the notification (full text: history)
 const RATE_WINDOW_MS = 5 * 60_000;     // per-pair limit: at most RATE_MAX mentions per window
 const RATE_MAX = 10;
@@ -73,7 +59,6 @@ const errMsg = (e) => `${e?.response?.status ?? ''} ${e?.message ?? String(e)}`.
 process.on('unhandledRejection', (e) => { log('fatal:', errMsg(e)); process.exit(1); });
 process.on('uncaughtException', (e) => { log('fatal:', errMsg(e)); process.exit(1); });
 
-const happyHome = process.env.HAPPY_HOME_DIR ?? join(homedir(), '.happy');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- credentials & decryption (from happy-agent) ----------
@@ -135,7 +120,10 @@ state.seen ??= {};     // sessionId -> [messageId...]  (dedupe across restarts)
 state.aliases ??= {};  // sessionId -> [handle...]     (past titles stay valid)
 state.briefed ??= {};  // sessionId -> bot.md version last delivered
 state.maxSeq ??= {};   // sessionId -> highest message seq seen (replay filter)
-const saveState = () => writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+const saveState = () => {
+  mkdirSync(dirname(STATE_FILE), { recursive: true });
+  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
+};
 
 // ---------- sessions & enrollment ----------
 //
@@ -363,7 +351,7 @@ const briefingQueued = new Set();
 
 const outbox = new Map(); // targetId -> [{ text: string | () => string, onSent }]
 const run = (argv) => new Promise((res) => {
-  execFile(process.execPath, [HAPPY_AGENT_BIN, ...argv], { timeout: 0 }, (err, stdout, stderr) =>
+  execFile(process.execPath, [HAPPY_AGENT_BIN, ...argv], { timeout: 0, env: cliEnvironment(config) }, (err, stdout, stderr) =>
     res({ ok: !err, out: (stdout + stderr).trim() }));
 });
 function send(to, text, onSent) {
@@ -463,7 +451,7 @@ setInterval(() => {
 loadBotMd();
 let botMdTimer = null;
 fsWatch(dirname(BOT_MD), (_, f) => {
-  if (f !== 'bot.md') return;
+  if (f && f.toString() !== basename(BOT_MD)) return;
   clearTimeout(botMdTimer);
   botMdTimer = setTimeout(() => {
     const before = botMdVersion;

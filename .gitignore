@@ -1,6 +1,7 @@
 # Private working records and runtime state
 ledger.md
 .fleet-watch-state.json
+.fleet-watch-preview.json
 *.log
 *.tmp
 
@@ -22,3 +23,6 @@ deploy/*.service
 
 node_modules/
 .DS_Store
+
+# Extracted offline runtime; the verified archive is committed instead.
+vendor/happy-agent/
