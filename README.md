@@ -138,6 +138,54 @@ systemctl --user disable --now fleet-watch
 
 See [fleet-watch.md](fleet-watch.md) for behavior and known limitations.
 
+## Keeping a live deployment separate from repository updates
+
+Use the ignored `local/` directory for production-specific rules, runtime state, working records and backups. Keep credentials in `~/.happy` (or another private directory outside the repository). The tracked `bot.md`, `CLAUDE.md` and example files are distribution templates; do not use tracked `bot.md` as the live briefing file if repository updates must not automatically change worker instructions.
+
+For a new deployment, before starting the service:
+
+```bash
+mkdir -p local
+cp bot.md local/bot.md
+cp CLAUDE.md local/CLAUDE.md
+cp ledger.example.md local/ledger.md
+```
+
+For an existing deployment, preserve its actual rules and ledger instead of replacing them with these templates. Stop the old watcher before copying its final state file, and keep only one watcher running. Open turns and pending outbound messages are held only in memory, so switch during an idle period. Give the Commander the local instructions and ledger; the watcher itself does not read those two files.
+
+Set these paths in your ignored `.env`:
+
+```dotenv
+FLEET_BOT_MD=local/bot.md
+FLEET_STATE_FILE=local/fleet-watch-state.json
+HAPPY_HOME_DIR=~/.happy
+```
+
+Store machine-specific systemd settings in a user drop-in outside the repository, rather than editing the generated unit (setup regenerates it). For example, `systemctl --user edit fleet-watch.service` can add a mount dependency for a deployment stored under `/mnt/fleet-data`:
+
+```ini
+[Unit]
+RequiresMountsFor=/mnt/fleet-data
+```
+
+Use your deployment's actual mount path. The drop-in lives under `~/.config/systemd/user/fleet-watch.service.d/` and survives replacement of the base unit. Run `systemctl --user daemon-reload` after unit/drop-in changes. Credentials and tokens should not be placed in the unit.
+
+For normal code updates, record the current commit, pull without merging local edits, and validate before restarting:
+
+```bash
+git rev-parse HEAD
+git pull --ff-only
+node scripts/setup.mjs
+node --test --test-isolation=none test/config.test.mjs
+node fleet-watch.mjs --check-config
+```
+
+Run each step only if the previous one succeeds. Review the pulled changes, especially changes to the runtime archive, configuration and service template. Setup preserves existing `.env` and the extracted agent runtime; it does not activate a changed archive automatically. An agent runtime upgrade is a separate operation: stop the service, move the old extracted directory into a private backup under `local/`, and run setup to extract the new bundle before validation. Keep the previous runtime available for rollback.
+
+Restart during an idle period after checks pass, then inspect the journal. If the base unit changed or the project/Node path moved, copy the regenerated unit and reload systemd before restarting, as shown above. Updating files is not an atomic deployment: for strict release isolation, stage and test a separate checkout before switching the service. Configuration checks do not validate live authentication or message delivery.
+
+`git pull` does not normally touch ignored, untracked local files. Ignore rules are not a security boundary: they do not protect already tracked files or prevent `git add -f`, and `git clean -fdx` deletes ignored data. Before committing, inspect `git diff --cached --name-only`; never force-add live data. Keep backups outside the repository as well. New custom state/config paths outside `local/` need their own ignore rules or should live outside the checkout.
+
 ## Validation
 
 ```bash

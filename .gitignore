@@ -26,3 +26,6 @@ node_modules/
 
 # Extracted offline runtime; the verified archive is committed instead.
 vendor/happy-agent/
+
+# Local production rules, state, backups and working records
+/local/
