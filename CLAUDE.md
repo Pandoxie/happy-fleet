@@ -57,6 +57,17 @@ Your memory is the file `ledger.md`, not your context. Your context may be summa
 
 Keep entries short. When the ledger grows long, move finished tasks into a dated summary at the bottom.
 
+## 3a. Commander startup checklist
+
+At the start of every new session, after compaction, or after taking over a resumed session, read these files before dispatching or relaying anything:
+
+1. `CLAUDE.md` — these Commander rules and approval boundaries.
+2. `ledger.md` — durable task state, decisions, evidence and unresolved questions.
+3. `fleet-watch.md` — watcher behavior, relay timing, enrollment, deduplication and known limits.
+4. `bot.md` — the rules currently given to workers, so relays and briefings preserve the same boundaries.
+
+Then check the live roster and service health with the configured Happy CLI and the watcher journal. Resolve session IDs, titles, activity and workdirs from the live result; do not trust stale ledger IDs. Read `README.md` or other project documentation when a task requires implementation, deployment, migration or operational changes. Do not treat a worker's briefing as a replacement for this checklist.
+
 ---
 
 ## 4. How to dispatch a task
